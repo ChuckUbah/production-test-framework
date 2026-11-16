@@ -429,9 +429,31 @@ class TestKubernetesClient:
         assert mock_ssh.run_kubectl.call_args_list[0][0][0] == "get pods -n ns -l app=x -o json"
         assert mock_ssh.run_kubectl.call_count == 2, "the Secret should be read once"
 
+    def test_pod_env_resolves_field_refs(self, k8s_client, mock_ssh):
+        listing = self._pods(
+            [
+                {"name": "HOST", "valueFrom": {"fieldRef": {"fieldPath": "status.hostIP"}}},
+                {"name": "POD", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},
+                {"name": "APP", "valueFrom": {"fieldRef": {"fieldPath": "metadata.labels['app']"}}},
+                {"name": "NODE", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
+            ]
+        )
+        items = json.loads(listing.stdout)
+        items["items"][0]["metadata"]["labels"] = {"app": "x"}
+        items["items"][0]["status"] = {"hostIP": "192.0.2.5"}
+        mock_ssh.run_kubectl.return_value = CommandResult(returncode=0, stdout=json.dumps(items), stderr="")
+
+        pods, result = k8s_client.pod_env("ns", "app=x")
+
+        assert result.success
+        assert pods == {"pod-0": {"HOST": "192.0.2.5", "POD": "pod-0", "APP": "x"}}, "an unscheduled pod has no node"
+
     def test_pod_env_skips_other_sources(self, k8s_client, mock_ssh):
-        field_ref = {"fieldRef": {"fieldPath": "status.hostIP"}}
-        mock_ssh.run_kubectl.return_value = self._pods([{"name": "HOST", "valueFrom": field_ref}])
+        resource_ref = {"resourceFieldRef": {"resource": "limits.cpu"}}
+        config_ref = {"configMapKeyRef": {"name": "cfg", "key": "mode"}}
+        mock_ssh.run_kubectl.return_value = self._pods(
+            [{"name": "CPU", "valueFrom": resource_ref}, {"name": "MODE", "valueFrom": config_ref}]
+        )
         pods, _ = k8s_client.pod_env("ns", "app=x")
         assert pods == {"pod-0": {}}
 

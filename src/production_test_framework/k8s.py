@@ -12,6 +12,7 @@ import base64
 import json
 import logging
 import os
+import re
 import shlex
 import socket
 import subprocess
@@ -105,6 +106,16 @@ class Pod:
             return False
         ready, total = self.ready.split("/")
         return ready == total and int(ready) > 0
+
+
+def _pod_field(pod: dict, path: str) -> str | None:
+    """Value of a downward API fieldPath on a pod object, or None when the pod does not have it."""
+    if match := re.fullmatch(r"metadata\.(labels|annotations)\['(.+)'\]", path):
+        return pod["metadata"].get(match[1], {}).get(match[2])
+    value = pod
+    for key in path.split("."):
+        value = value.get(key) if isinstance(value, dict) else None
+    return value if isinstance(value, str) else None
 
 
 class KubernetesClient:
@@ -355,8 +366,9 @@ class KubernetesClient:
         """
         Get the environment of every pod matching a label selector, as {pod: {variable: value}}.
 
-        Literal values and secretKeyRef references are resolved and merged across the pod's
-        containers; other valueFrom sources and envFrom are left out. A missing optional Secret
+        Literal values, fieldRef and secretKeyRef references are resolved and merged across the
+        pod's containers; other valueFrom sources and envFrom are left out, as is a fieldRef the
+        pod does not have yet (e.g. status.hostIP before scheduling). A missing optional Secret
         key is left out, as the kubelet does; any other unresolvable reference fails the call.
         """
         listing, result = self._get_json(f"get pods -n {namespace} -l {selector} -o json")
@@ -371,8 +383,13 @@ class KubernetesClient:
             for container in pod["spec"]["containers"]:
                 for entry in container.get("env", []):
                     ref = entry.get("valueFrom", {}).get("secretKeyRef")
+                    field = entry.get("valueFrom", {}).get("fieldRef")
                     if "valueFrom" not in entry:
                         env[entry["name"]] = entry.get("value", "")
+                    elif field:
+                        value = _pod_field(pod, field["fieldPath"])
+                        if value is not None:
+                            env[entry["name"]] = value
                     elif ref:
                         if ref["name"] not in secrets:
                             secret, _ = self.get_secret(ref["name"], namespace)

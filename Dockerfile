@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: FSL-1.1-ALv2
 # Copyright (c) 2025 Delos Data, Inc.
 FROM docker:29.1-cli
-RUN apk add --no-cache curl bash openssl make openssh build-base sudo shadow shadow-login
+# Upgrade base packages first so preinstalled ones (e.g. openssh-client-common) match the
+# current repo versions; otherwise apk add can fail with "breaks:" version conflicts.
+RUN apk upgrade --no-cache \
+    && apk add --no-cache curl bash openssl make openssh build-base sudo shadow shadow-login
 # Create a non-root user
 ARG USERNAME=appuser
 ARG HOME=/home/$USERNAME
